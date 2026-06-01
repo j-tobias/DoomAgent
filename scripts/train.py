@@ -54,10 +54,11 @@ def main() -> None:
     )
 
     env = make_env(env_cfg, reward_fn=CustomReward(num_players=1))
-    obs_shape = env.observation_space.shape   # (C, H, W)
     n_actions = env.action_space.n
+    # observation_space spatial dims are pre-transform; channels are correct
+    in_channels = env.observation_space.shape[0]
 
-    encoder = NatureCNN(in_channels=obs_shape[0])
+    encoder = NatureCNN(in_channels=in_channels)
     model = PPOActorCritic(encoder, n_actions=n_actions, env_cfg=env_cfg)
 
     agent = PPOAgent(model, cfg, device)

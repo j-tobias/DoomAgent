@@ -200,11 +200,12 @@ class PPOAgent(BaseAgent):
         Logs every rollout, checkpoints every cfg.checkpoint_interval steps,
         and exports the final ONNX model on completion.
         """
-        obs_shape = env.observation_space.shape
+        # Use the actual post-transform shape, not observation_space which
+        # reports raw resolution before the env's resize transform.
+        obs = env.reset()[0]
+        obs_shape = obs.shape
         if self._buffer is None:
             self.setup(obs_shape)
-
-        obs = env.reset()[0]
         last_checkpoint = 0
 
         while self.step < self.cfg.total_steps:

@@ -161,11 +161,12 @@ class DQNAgent(BaseAgent):
         Full training loop. Logs at each episode end, checkpoints every
         cfg.checkpoint_interval steps, exports ONNX on completion.
         """
-        obs_shape = env.observation_space.shape
+        # Use the actual post-transform shape, not observation_space which
+        # reports raw resolution before the env's resize transform.
+        obs = env.reset()[0]
+        obs_shape = obs.shape
         if self._buffer is None:
             self.setup(obs_shape)
-
-        obs = env.reset()[0]
         ep_reward = 0.0
         ep_len = 0
         last_checkpoint = 0
