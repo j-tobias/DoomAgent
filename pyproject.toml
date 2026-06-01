@@ -4,8 +4,6 @@ version = "0.1.0"
 description = "VizDoom deathmatch agent — JKU Deep RL 2025"
 readme = "README.md"
 requires-python = ">=3.13"
-packages = [{include = "doomagent"}]
-
 dependencies = [
     "torch==2.10.0",
     "numpy==2.4.2",
@@ -21,3 +19,10 @@ dependencies = [
     "gymnasium==1.2.3",
     "torchvision",
 ]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/doomagent"]
