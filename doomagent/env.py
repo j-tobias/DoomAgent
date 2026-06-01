@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Callable, Optional
 
 import doom_arena
 from doom_arena.doom_env import VizdoomMPEnv
@@ -10,13 +11,14 @@ from .config import EnvConfig
 _JKU_CFG = str(Path(doom_arena.__file__).parent / "scenarios" / "jku.cfg")
 
 
-def make_env(cfg: EnvConfig) -> VizdoomMPEnv:
+def make_env(cfg: EnvConfig, reward_fn: Optional[Callable] = None) -> VizdoomMPEnv:
     extra_state = None
     if cfg.extra_state:
         extra_state = [ObsBuffer(s) for s in cfg.extra_state]
 
     return VizdoomMPEnv(
         config_path=_JKU_CFG,
+        reward_fn=reward_fn,
         num_players=1,
         num_bots=cfg.num_bots,
         bot_skill=cfg.bot_skill,
