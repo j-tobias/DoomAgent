@@ -13,3 +13,4 @@ wheels/
 *Doom.pdf
 runs/
 *.onnx
+resources/*.py
