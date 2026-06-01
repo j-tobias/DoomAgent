@@ -6,8 +6,10 @@ Usage:
     uv run scripts/train_dqn.py --run-name dqn_exp --total-steps 500000 --buffer-size 50000
 """
 import argparse
+import random
 from pathlib import Path
 
+import numpy as np
 import torch
 
 from doomagent.agents.dqn import DQNAgent
@@ -32,6 +34,11 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    random.seed(args.seed)
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
+    torch.cuda.manual_seed_all(args.seed)
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Device: {device}")
 
