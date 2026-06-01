@@ -35,7 +35,7 @@ def main() -> None:
 
     log_dir = Path(cfg.out_dir) / cfg.run_name
 
-    with Logger(log_dir) as logger:
+    with Logger(log_dir, project="doomagent", run_name=cfg.run_name, config=cfg) as logger:
         env = make_env(cfg.env)
         obs_shape = env.observation_space.shape  # (C, H, W)
 
