@@ -11,3 +11,5 @@ wheels/
 
 # Project-specific files
 *Doom.pdf
+runs/
+*.onnx
