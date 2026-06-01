@@ -21,7 +21,7 @@ class RolloutBuffer:
         actions    (n_steps,)  int64
         log_probs  (n_steps,)
         rewards    (n_steps,)
-        dones      (n_steps,)  — 0.0 or 1.0
+        dones      (n_steps,)  — 0.0 or 1.0, done flag returned by env.step()
         values     (n_steps,)
         advantages (n_steps,)  — filled by compute_gae()
         returns    (n_steps,)  — filled by compute_gae()
@@ -45,7 +45,7 @@ class RolloutBuffer:
         self._alloc()
 
     # ------------------------------------------------------------------
-    # Storage management — real implementations
+    # Storage management
     # ------------------------------------------------------------------
 
     def _alloc(self) -> None:
@@ -68,10 +68,6 @@ class RolloutBuffer:
         done: bool,
         value: torch.Tensor,
     ) -> None:
-        """
-        Store one transition. obs is copied to self.device if needed.
-        Raises RuntimeError if the buffer is already full.
-        """
         if self._ptr >= self.n_steps:
             raise RuntimeError("RolloutBuffer is full — call reset() before adding.")
         i = self._ptr
@@ -93,42 +89,77 @@ class RolloutBuffer:
         self._gae_computed = False
 
     # ------------------------------------------------------------------
-    # GAE computation — STUB (training logic)
+    # GAE computation
     # ------------------------------------------------------------------
 
+    @torch.no_grad()
     def compute_gae(self, last_value: torch.Tensor, last_done: bool) -> None:
         """
         Compute GAE(λ) advantages and discounted returns in-place.
 
-        Must be called once after the buffer is full and before
-        iter_minibatches(). Sets self.advantages and self.returns.
+        dones[t] = 1 means the episode ended after step t, so the next
+        observation belongs to a new episode and should not be bootstrapped.
 
         Args:
-            last_value: V(s_{T+1}) bootstrap estimate, shape (1,) or scalar.
-                        Pass zeros if the episode ended (last_done=True).
-            last_done:  True if the final step was a terminal episode step.
+            last_value: V(s_{T+1}) bootstrap estimate — shape (1,) or scalar.
+            last_done:  True if the episode ended on the final collected step.
         """
-        raise NotImplementedError
+        last_gae = torch.zeros(1, device=self.device)
+        last_value = last_value.squeeze().to(self.device)
+
+        for t in reversed(range(self.n_steps)):
+            if t == self.n_steps - 1:
+                next_nonterminal = 1.0 - float(last_done)
+                next_value = last_value
+            else:
+                next_nonterminal = 1.0 - self.dones[t]
+                next_value = self.values[t + 1]
+
+            delta = (
+                self.rewards[t]
+                + self.gamma * next_value * next_nonterminal
+                - self.values[t]
+            )
+            last_gae = delta + self.gamma * self.gae_lambda * next_nonterminal * last_gae
+            self.advantages[t] = last_gae
+
+        self.returns = self.advantages + self.values
+        self._gae_computed = True
 
     # ------------------------------------------------------------------
-    # Minibatch iteration — STUB (depends on GAE output)
+    # Minibatch iteration
     # ------------------------------------------------------------------
 
     def iter_minibatches(
         self, n_minibatches: int
-    ) -> "Generator[dict[str, torch.Tensor], None, None]":
+    ) -> Generator[dict[str, torch.Tensor], None, None]:
         """
-        Yield n_minibatches random-permuted minibatches as dicts:
-            obs, actions, log_probs_old, advantages, returns
+        Yield n_minibatches random-permuted minibatches.
 
         Advantages are normalised (mean=0, std=1) across the full buffer
         before splitting. Raises RuntimeError if compute_gae() has not
         been called since the last add() or reset().
 
-        batch_size = n_steps // n_minibatches (integer division).
+        Each yielded dict has keys:
+            obs, actions, log_probs_old, advantages, returns
         """
         if not self._gae_computed:
-            raise RuntimeError(
-                "Call compute_gae() before iter_minibatches()."
-            )
-        raise NotImplementedError
+            raise RuntimeError("Call compute_gae() before iter_minibatches().")
+
+        batch_size = self.n_steps // n_minibatches
+
+        # Normalise advantages globally before splitting into minibatches
+        adv = self.advantages
+        adv = (adv - adv.mean()) / (adv.std() + 1e-8)
+
+        indices = torch.randperm(self.n_steps, device=self.device)
+
+        for start in range(0, self.n_steps, batch_size):
+            idx = indices[start : start + batch_size]
+            yield {
+                "obs": self.obs[idx],
+                "actions": self.actions[idx],
+                "log_probs_old": self.log_probs[idx],
+                "advantages": adv[idx],
+                "returns": self.returns[idx],
+            }
