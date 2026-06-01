@@ -1,0 +1,3 @@
+[submodule "jku.wad"]
+	path = jku.wad
+	url = https://github.com/gerkone/jku.wad.git

@@ -1,0 +1,21 @@
+[project]
+name = "doomagent"
+version = "0.1.0"
+description = "VizDoom deathmatch agent — JKU Deep RL 2025"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "torch==2.10.0",
+    "numpy==2.4.2",
+    "matplotlib",
+    "pandas",
+    "einops==0.8.2",
+    "pillow",
+    "vizdoom==1.3.0",
+    "portpicker==1.6.0",
+    "onnx==1.21.0",
+    "onnxscript==0.7.0",
+    "onnx2pytorch==0.5.3",
+    "gymnasium==1.2.3",
+    "torchvision",
+]
