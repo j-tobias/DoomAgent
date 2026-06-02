@@ -32,6 +32,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--total-steps", type=int, default=1_000_000)
     p.add_argument("--n-steps", type=int, default=512)
     p.add_argument("--n-epochs", type=int, default=4)
+    p.add_argument("--n-minibatches", type=int, default=None,
+                   help="Minibatches per rollout. Defaults to n_steps//512 to keep batch_size~512")
     p.add_argument("--lr", type=float, default=2.5e-4)
     p.add_argument("--ent-coef", type=float, default=0.01)
     p.add_argument("--extra-state", nargs="+", default=None,
@@ -56,12 +58,14 @@ def main() -> None:
     print(f"Device: {device}")
 
     env_cfg = EnvConfig(seed=args.seed, extra_state=args.extra_state)
+    n_minibatches = args.n_minibatches or max(1, args.n_steps // 512)
     cfg = PPOConfig(
         env=env_cfg,
         run_name=args.run_name,
         total_steps=args.total_steps,
         n_steps=args.n_steps,
         n_epochs=args.n_epochs,
+        n_minibatches=n_minibatches,
         lr=args.lr,
         ent_coef=args.ent_coef,
     )

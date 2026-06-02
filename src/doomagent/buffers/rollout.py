@@ -131,7 +131,7 @@ class RolloutBuffer:
     # ------------------------------------------------------------------
 
     def iter_minibatches(
-        self, n_minibatches: int
+        self, n_minibatches: int, compute_device: torch.device | None = None
     ) -> Generator[dict[str, torch.Tensor], None, None]:
         """
         Yield n_minibatches random-permuted minibatches.
@@ -140,12 +140,20 @@ class RolloutBuffer:
         before splitting. Raises RuntimeError if compute_gae() has not
         been called since the last add() or reset().
 
+        Args:
+            n_minibatches:  number of minibatches to split the buffer into.
+            compute_device: device to move each batch to before yielding.
+                            Defaults to self.device (storage device).
+                            Pass the model's device (e.g. cuda:0) when the
+                            buffer is stored on CPU to avoid OOM on large buffers.
+
         Each yielded dict has keys:
             obs, actions, log_probs_old, values_old, advantages, returns
         """
         if not self._gae_computed:
             raise RuntimeError("Call compute_gae() before iter_minibatches().")
 
+        target = compute_device or self.device
         batch_size = self.n_steps // n_minibatches
 
         # Normalise advantages globally before splitting into minibatches
@@ -157,10 +165,10 @@ class RolloutBuffer:
         for start in range(0, self.n_steps, batch_size):
             idx = indices[start : start + batch_size]
             yield {
-                "obs": self.obs[idx],
-                "actions": self.actions[idx],
-                "log_probs_old": self.log_probs[idx],
-                "values_old": self.values[idx],
-                "advantages": adv[idx],
-                "returns": self.returns[idx],
+                "obs":          self.obs[idx].to(target),
+                "actions":      self.actions[idx].to(target),
+                "log_probs_old":self.log_probs[idx].to(target),
+                "values_old":   self.values[idx].to(target),
+                "advantages":   adv[idx].to(target),
+                "returns":      self.returns[idx].to(target),
             }

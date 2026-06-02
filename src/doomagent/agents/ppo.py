@@ -40,10 +40,12 @@ class PPOAgent(BaseAgent):
         Allocate the RolloutBuffer. Called automatically by train() but can
         be called manually beforehand when obs_shape is already known.
         """
+        # Always store the buffer on CPU — obs tensors can be GBs at large n_steps.
+        # Minibatches are moved to self.device (GPU) in iter_minibatches.
         self._buffer = RolloutBuffer(
             n_steps=self.cfg.n_steps,
             obs_shape=obs_shape,
-            device=self.device,
+            device=torch.device("cpu"),
             gamma=self.cfg.gamma,
             gae_lambda=self.cfg.gae_lambda,
         )
@@ -82,7 +84,7 @@ class PPOAgent(BaseAgent):
         n_updates = 0
 
         for _ in range(self.cfg.n_epochs):
-            for batch in self._buffer.iter_minibatches(self.cfg.n_minibatches):
+            for batch in self._buffer.iter_minibatches(self.cfg.n_minibatches, self.device):
                 log_prob, entropy, value = self.model.evaluate_actions(
                     batch["obs"], batch["actions"]
                 )
