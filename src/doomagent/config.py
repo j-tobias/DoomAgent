@@ -43,6 +43,13 @@ class PPOConfig(TrainConfig):
     anneal_lr: bool = True          # linear lr decay over total_steps
     anneal_lr_min_frac: float = 0.1 # lr floor as fraction of initial lr
     clip_vf: bool = True            # clip value loss (prevents vf divergence)
+    # Reward normalisation
+    normalize_rewards: bool = True  # divide rewards by running std before storing
+    # Entropy annealing
+    anneal_ent_coef: bool = True    # linearly decay ent_coef → ent_coef_final
+    ent_coef_final: float = 0.001   # floor entropy coefficient
+    # KL early stopping
+    target_kl: float | None = 0.01 # stop update epochs when mean KL exceeds this
 
 
 @dataclass

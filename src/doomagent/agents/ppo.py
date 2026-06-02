@@ -9,6 +9,7 @@ from ..buffers.rollout import RolloutBuffer
 from ..config import PPOConfig
 from ..models.ppo import PPOActorCritic
 from ..utils.logger import Logger
+from ..utils.running_stats import RunningMeanStd
 from .base import BaseAgent
 
 
@@ -20,28 +21,19 @@ class PPOAgent(BaseAgent):
         agent.train(env, logger)
             └── while step < total_steps:
                     collect(env, obs)   # fill buffer, compute GAE
-                    update()            # n_epochs × n_minibatches gradient steps
+                    update(ent_coef)    # n_epochs (with KL early stop) × n_minibatches
                     log / checkpoint
     """
 
-    def __init__(
-        self,
-        model: PPOActorCritic,
-        cfg: PPOConfig,
-        device: torch.device,
-    ):
+    def __init__(self, model: PPOActorCritic, cfg: PPOConfig, device: torch.device):
         super().__init__(model, cfg, device)
         self.cfg: PPOConfig = cfg
         self.optimizer = optim.Adam(model.parameters(), lr=cfg.lr, eps=1e-5)
         self._buffer: RolloutBuffer | None = None
+        self._reward_rms = RunningMeanStd()  # for reward normalisation
 
     def setup(self, obs_shape: tuple) -> None:
-        """
-        Allocate the RolloutBuffer. Called automatically by train() but can
-        be called manually beforehand when obs_shape is already known.
-        """
-        # Always store the buffer on CPU — obs tensors can be GBs at large n_steps.
-        # Minibatches are moved to self.device (GPU) in iter_minibatches.
+        """Allocate the RolloutBuffer on CPU (minibatches move to GPU during update)."""
         self._buffer = RolloutBuffer(
             n_steps=self.cfg.n_steps,
             obs_shape=obs_shape,
@@ -51,26 +43,55 @@ class PPOAgent(BaseAgent):
         )
 
     # ------------------------------------------------------------------
+    # Checkpoint — override base to persist reward RMS and entropy state
+    # ------------------------------------------------------------------
+
+    def save(self, path: str | Path) -> None:
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        torch.save({
+            "step": self.step,
+            "model": self.model.state_dict(),
+            "optimizer": self.optimizer.state_dict(),
+            "reward_rms": self._reward_rms.state_dict(),
+        }, path)
+        print(f"Checkpoint saved → {path}")
+
+    def load(self, path: str | Path) -> None:
+        ckpt = torch.load(path, map_location=self.device, weights_only=True)
+        self.step = ckpt["step"]
+        self.model.load_state_dict(ckpt["model"])
+        self.optimizer.load_state_dict(ckpt["optimizer"])
+        if "reward_rms" in ckpt:
+            self._reward_rms.load_state_dict(ckpt["reward_rms"])
+        print(f"Checkpoint loaded ← {path}  (step {self.step})")
+
+    # ------------------------------------------------------------------
     # BaseAgent contract
     # ------------------------------------------------------------------
 
     @torch.no_grad()
     def select_action(self, obs: torch.Tensor) -> int:
-        """
-        Deterministic evaluation action — argmax of policy logits.
-        obs: (C, H, W) CPU tensor. During training use model.act() instead.
-        """
+        """Deterministic evaluation action — argmax of policy logits."""
         obs = obs.unsqueeze(0).to(self.device, dtype=torch.float32)
         logits, _ = self.model(obs)
         return logits.argmax(-1).cpu().item()
 
-    def update(self) -> dict[str, float]:
+    def update(self, ent_coef: float | None = None) -> dict[str, float]:
         """
-        Run cfg.n_epochs × cfg.n_minibatches PPO gradient steps on the buffer.
+        PPO gradient update with KL early stopping.
 
-        Returns averaged metrics over all gradient steps:
-            policy_loss, value_loss, entropy, total_loss, approx_kl, clip_frac
+        Runs up to cfg.n_epochs epochs. If cfg.target_kl is set, stops
+        early once the mean KL across a full epoch exceeds the threshold —
+        preventing the policy from moving too far in a single update.
+
+        Args:
+            ent_coef: entropy coefficient for this update (allows annealing
+                      from train()). Falls back to cfg.ent_coef if None.
         """
+        if ent_coef is None:
+            ent_coef = self.cfg.ent_coef
+
         self.model.train()
 
         totals: dict[str, float] = {
@@ -82,15 +103,18 @@ class PPOAgent(BaseAgent):
             "clip_frac": 0.0,
         }
         n_updates = 0
+        epochs_done = 0
 
         for _ in range(self.cfg.n_epochs):
+            epoch_kl = 0.0
+            epoch_batches = 0
+
             for batch in self._buffer.iter_minibatches(self.cfg.n_minibatches, self.device):
                 log_prob, entropy, value = self.model.evaluate_actions(
                     batch["obs"], batch["actions"]
                 )
                 value = value.squeeze()
 
-                # PPO clipped surrogate objective
                 ratio = torch.exp(log_prob - batch["log_probs_old"])
                 adv = batch["advantages"]
                 policy_loss = torch.max(
@@ -98,7 +122,6 @@ class PPOAgent(BaseAgent):
                     -adv * torch.clamp(ratio, 1 - self.cfg.clip_eps, 1 + self.cfg.clip_eps),
                 ).mean()
 
-                # Value loss (with optional clipping to prevent vf divergence)
                 if self.cfg.clip_vf:
                     v_clipped = batch["values_old"] + torch.clamp(
                         value - batch["values_old"],
@@ -112,13 +135,11 @@ class PPOAgent(BaseAgent):
                 else:
                     value_loss = 0.5 * (value - batch["returns"]).pow(2).mean()
 
-                # Entropy bonus
                 entropy_mean = entropy.mean()
-
                 loss = (
                     policy_loss
                     + self.cfg.vf_coef * value_loss
-                    - self.cfg.ent_coef * entropy_mean
+                    - ent_coef * entropy_mean
                 )
 
                 self.optimizer.zero_grad()
@@ -127,39 +148,39 @@ class PPOAgent(BaseAgent):
                 self.optimizer.step()
 
                 with torch.no_grad():
-                    approx_kl = ((ratio - 1) - torch.log(ratio)).mean()
-                    clip_frac = ((ratio - 1).abs() > self.cfg.clip_eps).float().mean()
+                    approx_kl = ((ratio - 1) - torch.log(ratio)).mean().item()
+                    clip_frac = ((ratio - 1).abs() > self.cfg.clip_eps).float().mean().item()
 
                 totals["policy_loss"] += policy_loss.item()
                 totals["value_loss"] += value_loss.item()
                 totals["entropy"] += entropy_mean.item()
                 totals["total_loss"] += loss.item()
-                totals["approx_kl"] += approx_kl.item()
-                totals["clip_frac"] += clip_frac.item()
+                totals["approx_kl"] += approx_kl
+                totals["clip_frac"] += clip_frac
                 n_updates += 1
+                epoch_kl += approx_kl
+                epoch_batches += 1
 
-        return {k: v / n_updates for k, v in totals.items()}
+            epochs_done += 1
+
+            # KL early stopping — check after each full epoch
+            if self.cfg.target_kl is not None and epoch_kl / epoch_batches > self.cfg.target_kl:
+                break
+
+        metrics = {k: v / n_updates for k, v in totals.items()}
+        metrics["epochs_done"] = float(epochs_done)
+        metrics["ent_coef"] = ent_coef
+        return metrics
 
     # ------------------------------------------------------------------
     # Training helpers
     # ------------------------------------------------------------------
 
-    def collect(
-        self, env, obs: torch.Tensor
-    ) -> tuple[torch.Tensor, bool, dict[str, float]]:
+    def collect(self, env, obs: torch.Tensor) -> tuple[torch.Tensor, bool, dict[str, float]]:
         """
-        Step the environment for cfg.n_steps, store transitions in the buffer,
-        then call buffer.compute_gae().
-
-        Args:
-            env: VizdoomMPEnv (single player).
-            obs: Current observation (C, H, W) CPU tensor.
-
-        Returns:
-            obs:         Observation to start the next collect() call from.
-            done:        Done flag of the final environment step.
-            rollout_info: Dict with ep_reward_mean / ep_len_mean / n_episodes
-                          for episodes that completed during this rollout.
+        Collect cfg.n_steps transitions. Rewards are normalised by running
+        std before being stored in the buffer; ep_reward_mean is logged in
+        raw units so the numbers remain interpretable.
         """
         if self._buffer is None:
             raise RuntimeError("Call setup(obs_shape) before collect().")
@@ -167,7 +188,7 @@ class PPOAgent(BaseAgent):
         self._buffer.reset()
         self.model.eval()
 
-        ep_reward = 0.0
+        ep_reward = 0.0     # raw reward for logging
         ep_len = 0
         completed: list[dict] = []
 
@@ -181,7 +202,14 @@ class PPOAgent(BaseAgent):
                 ep_reward += reward
                 ep_len += 1
 
-                self._buffer.add(obs, action[0], log_prob[0], reward, done, value[0])
+                # Reward normalisation: update running stats, store normalised value
+                if self.cfg.normalize_rewards:
+                    self._reward_rms.update(reward)
+                    stored_reward = self._reward_rms.normalize(reward)
+                else:
+                    stored_reward = reward
+
+                self._buffer.add(obs, action[0], log_prob[0], stored_reward, done, value[0])
                 self.step += 1
 
                 if done:
@@ -191,7 +219,6 @@ class PPOAgent(BaseAgent):
                 else:
                     obs = obs_list[0]
 
-            # Bootstrap value for GAE
             last_value = self.model(obs.unsqueeze(0).to(self.device, dtype=torch.float32))[1]
 
         self._buffer.compute_gae(last_value, done)
@@ -199,22 +226,18 @@ class PPOAgent(BaseAgent):
         rollout_info: dict[str, float] = {}
         if completed:
             rollout_info["ep_reward_mean"] = sum(e["ep_reward"] for e in completed) / len(completed)
-            rollout_info["ep_len_mean"] = sum(e["ep_len"] for e in completed) / len(completed)
-            rollout_info["n_episodes"] = float(len(completed))
+            rollout_info["ep_len_mean"]    = sum(e["ep_len"]    for e in completed) / len(completed)
+            rollout_info["n_episodes"]     = float(len(completed))
+            if self.cfg.normalize_rewards:
+                rollout_info["reward_rms_std"] = self._reward_rms.std
 
         return obs, done, rollout_info
 
     def train(self, env, logger: Logger) -> None:
         """
-        Full training loop.
-
-        Sets up the buffer from env.observation_space, then alternates
-        collect() / update() until cfg.total_steps is reached.
-        Logs every rollout, checkpoints every cfg.checkpoint_interval steps,
-        and exports the final ONNX model on completion.
+        Full training loop with LR annealing, entropy annealing, reward
+        normalisation, and KL early stopping.
         """
-        # Use the actual post-transform shape, not observation_space which
-        # reports raw resolution before the env's resize transform.
         obs = env.reset()[0]
         obs_shape = obs.shape
         if self._buffer is None:
@@ -222,18 +245,25 @@ class PPOAgent(BaseAgent):
         last_checkpoint = 0
 
         while self.step < self.cfg.total_steps:
-            # Linear LR annealing with floor to prevent learning from stopping
+            progress = self.step / self.cfg.total_steps
+
+            # LR annealing with floor
             if self.cfg.anneal_lr:
-                frac = max(
-                    self.cfg.anneal_lr_min_frac,
-                    1.0 - self.step / self.cfg.total_steps,
-                )
+                lr_frac = max(self.cfg.anneal_lr_min_frac, 1.0 - progress)
                 for pg in self.optimizer.param_groups:
-                    pg["lr"] = frac * self.cfg.lr
+                    pg["lr"] = lr_frac * self.cfg.lr
+
+            # Entropy coefficient annealing
+            if self.cfg.anneal_ent_coef:
+                ent_coef = self.cfg.ent_coef_final + (
+                    self.cfg.ent_coef - self.cfg.ent_coef_final
+                ) * max(0.0, 1.0 - progress)
+            else:
+                ent_coef = self.cfg.ent_coef
 
             t0 = time.perf_counter()
             obs, done, rollout_info = self.collect(env, obs)
-            update_metrics = self.update()
+            update_metrics = self.update(ent_coef=ent_coef)
             fps = int(self.cfg.n_steps / (time.perf_counter() - t0))
 
             logger.log(

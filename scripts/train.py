@@ -43,6 +43,14 @@ def parse_args() -> argparse.Namespace:
                    help="Use DeathPenaltyReward (-10 on death) instead of CustomReward")
     p.add_argument("--encoder", choices=["nature", "impala"], default="impala",
                    help="Encoder architecture (default: impala)")
+    p.add_argument("--no-reward-norm", action="store_true",
+                   help="Disable reward normalisation")
+    p.add_argument("--no-ent-anneal", action="store_true",
+                   help="Disable entropy coefficient annealing")
+    p.add_argument("--ent-coef-final", type=float, default=0.001,
+                   help="Final entropy coefficient when annealing (default: 0.001)")
+    p.add_argument("--target-kl", type=float, default=0.01,
+                   help="KL early-stopping threshold (default: 0.01, set 0 to disable)")
     p.add_argument("--seed", type=int, default=1337)
     p.add_argument("--no-wandb", action="store_true")
     return p.parse_args()
@@ -69,6 +77,10 @@ def main() -> None:
         n_minibatches=n_minibatches,
         lr=args.lr,
         ent_coef=args.ent_coef,
+        normalize_rewards=not args.no_reward_norm,
+        anneal_ent_coef=not args.no_ent_anneal,
+        ent_coef_final=args.ent_coef_final,
+        target_kl=args.target_kl if args.target_kl > 0 else None,
     )
 
     reward_fn = (
