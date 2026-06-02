@@ -1,5 +1,6 @@
+#!/usr/bin/env python -u
 """
-PPO training entry point.
+PPO training entry point.  (-u flag disables stdout buffering for live logs)
 
 Usage:
     uv run scripts/train.py --run-name ppo_baseline
