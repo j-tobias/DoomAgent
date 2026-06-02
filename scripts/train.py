@@ -18,10 +18,12 @@ import torch
 from doomagent.agents.ppo import PPOAgent
 from doomagent.config import EnvConfig, PPOConfig
 from doomagent.env import make_env
-from doomagent.models.encoder import NatureCNN
+from doomagent.models.encoder import IMPALAEncoder, NatureCNN
 from doomagent.models.ppo import PPOActorCritic
 from doomagent.reward import CustomReward, DeathPenaltyReward
 from doomagent.utils.logger import Logger
+
+_ENCODERS = {"nature": NatureCNN, "impala": IMPALAEncoder}
 
 
 def parse_args() -> argparse.Namespace:
@@ -36,6 +38,8 @@ def parse_args() -> argparse.Namespace:
                    help="Extra observation buffers, e.g. --extra-state labels depth")
     p.add_argument("--death-penalty", action="store_true",
                    help="Use DeathPenaltyReward (-10 on death) instead of CustomReward")
+    p.add_argument("--encoder", choices=["nature", "impala"], default="impala",
+                   help="Encoder architecture (default: impala)")
     p.add_argument("--seed", type=int, default=1337)
     p.add_argument("--no-wandb", action="store_true")
     return p.parse_args()
@@ -71,7 +75,7 @@ def main() -> None:
     n_actions = env.action_space.n
     in_channels = env.observation_space.shape[0]
 
-    encoder = NatureCNN(in_channels=in_channels)
+    encoder = _ENCODERS[args.encoder](in_channels=in_channels)
     model = PPOActorCritic(encoder, n_actions=n_actions, env_cfg=env_cfg)
     agent = PPOAgent(model, cfg, device)
 

@@ -40,7 +40,9 @@ class PPOConfig(TrainConfig):
     vf_coef: float = 0.5
     ent_coef: float = 0.01
     max_grad_norm: float = 0.5
-    anneal_lr: bool = True          # linear lr decay to 0 over total_steps
+    anneal_lr: bool = True          # linear lr decay over total_steps
+    anneal_lr_min_frac: float = 0.1 # lr floor as fraction of initial lr
+    clip_vf: bool = True            # clip value loss (prevents vf divergence)
 
 
 @dataclass

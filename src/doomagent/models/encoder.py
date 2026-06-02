@@ -82,6 +82,60 @@ class ResidualBlock(nn.Module):
 
 
 # ---------------------------------------------------------------------------
+# IMPALAEncoder — residual CNN for 128×128 input
+# ---------------------------------------------------------------------------
+
+class IMPALAEncoder(BaseEncoder):
+    """
+    CNN from the IMPALA paper (Espeholt et al. 2018), adapted for 128×128 input.
+
+    Three convolutional stacks, each followed by residual blocks. The skip
+    connections stabilise gradients and prevent the value-function collapse
+    seen with plain CNNs under sparse rewards.
+
+    Spatial resolution trace (128×128 input):
+        Conv(in_ch → 16, 3×3) + MaxPool(3, 2, 1)  →  64×64
+        2 × ResBlock(16)
+        Conv(16 → 32, 3×3)   + MaxPool(3, 2, 1)  →  32×32
+        2 × ResBlock(32)
+        Conv(32 → 32, 3×3)   + MaxPool(3, 2, 1)  →  16×16
+        2 × ResBlock(32)
+        ReLU → Flatten → Linear(8192, out_dim)
+
+    Args:
+        in_channels: input channel count (3 RGB, 4 with labels, etc.)
+        out_dim:     feature vector size (default 256 — IMPALA is efficient
+                     enough that 256 matches NatureCNN's 512 in practice).
+    """
+
+    # Stack config: (out_channels, n_residual_blocks)
+    _STACK = [(16, 2), (32, 2), (32, 2)]
+
+    def __init__(self, in_channels: int, out_dim: int = 256):
+        super().__init__()
+        self.out_dim = out_dim
+
+        stacks = []
+        ch = in_channels
+        for out_ch, n_blocks in self._STACK:
+            stacks.append(nn.Conv2d(ch, out_ch, kernel_size=3, padding=1))
+            stacks.append(nn.MaxPool2d(kernel_size=3, stride=2, padding=1))
+            for _ in range(n_blocks):
+                stacks.append(ResidualBlock(space=2, dim=out_ch, act_fn=nn.ReLU, depth=1))
+            ch = out_ch
+
+        self.conv = nn.Sequential(*stacks)
+        self.act = nn.ReLU()
+
+        with torch.no_grad():
+            flat_dim = self.act(self.conv(torch.zeros(1, in_channels, 128, 128))).flatten(1).shape[1]
+        self.linear = nn.Linear(flat_dim, out_dim)
+
+    def forward(self, obs: torch.Tensor) -> torch.Tensor:
+        return self.linear(self.act(self.conv(obs)).flatten(1))
+
+
+# ---------------------------------------------------------------------------
 # NatureCNN — NatureDQN-style encoder for 128×128 input
 # ---------------------------------------------------------------------------
 

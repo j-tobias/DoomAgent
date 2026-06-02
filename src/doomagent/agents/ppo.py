@@ -96,8 +96,19 @@ class PPOAgent(BaseAgent):
                     -adv * torch.clamp(ratio, 1 - self.cfg.clip_eps, 1 + self.cfg.clip_eps),
                 ).mean()
 
-                # Value loss
-                value_loss = 0.5 * (value - batch["returns"]).pow(2).mean()
+                # Value loss (with optional clipping to prevent vf divergence)
+                if self.cfg.clip_vf:
+                    v_clipped = batch["values_old"] + torch.clamp(
+                        value - batch["values_old"],
+                        -self.cfg.clip_eps,
+                        self.cfg.clip_eps,
+                    )
+                    value_loss = 0.5 * torch.max(
+                        (value - batch["returns"]).pow(2),
+                        (v_clipped - batch["returns"]).pow(2),
+                    ).mean()
+                else:
+                    value_loss = 0.5 * (value - batch["returns"]).pow(2).mean()
 
                 # Entropy bonus
                 entropy_mean = entropy.mean()
@@ -209,9 +220,12 @@ class PPOAgent(BaseAgent):
         last_checkpoint = 0
 
         while self.step < self.cfg.total_steps:
-            # Linear LR annealing
+            # Linear LR annealing with floor to prevent learning from stopping
             if self.cfg.anneal_lr:
-                frac = 1.0 - self.step / self.cfg.total_steps
+                frac = max(
+                    self.cfg.anneal_lr_min_frac,
+                    1.0 - self.step / self.cfg.total_steps,
+                )
                 for pg in self.optimizer.param_groups:
                     pg["lr"] = frac * self.cfg.lr
 

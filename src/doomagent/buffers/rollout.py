@@ -141,7 +141,7 @@ class RolloutBuffer:
         been called since the last add() or reset().
 
         Each yielded dict has keys:
-            obs, actions, log_probs_old, advantages, returns
+            obs, actions, log_probs_old, values_old, advantages, returns
         """
         if not self._gae_computed:
             raise RuntimeError("Call compute_gae() before iter_minibatches().")
@@ -160,6 +160,7 @@ class RolloutBuffer:
                 "obs": self.obs[idx],
                 "actions": self.actions[idx],
                 "log_probs_old": self.log_probs[idx],
+                "values_old": self.values[idx],
                 "advantages": adv[idx],
                 "returns": self.returns[idx],
             }
