@@ -1,17 +1,20 @@
 """
 Local evaluation — mirrors the grading server logic exactly.
 
+Supports two loading modes:
+    --submission model.onnx   Load via onnx2pytorch (same path as grading server)
+    --checkpoint  ckpt.pt     Load PyTorch weights directly (faster, no onnx2pytorch)
+
 Usage:
-    uv run scripts/evaluate.py --submission runs/my_run/submission.onnx --episodes 10
+    uv run scripts/evaluate.py --submission runs/impala_6M/submission.onnx
+    uv run scripts/evaluate.py --checkpoint runs/impala_6M/ckpt_006000000.pt
 """
 import argparse
 import json
 import os
 
 import numpy as np
-import onnx
 import torch
-from onnx2pytorch import ConvertModel
 from torch.distributions.categorical import Categorical
 
 from doomagent.config import EnvConfig
@@ -21,7 +24,7 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 DTYPE = torch.float32
 
 
-class _OnnxAgent:
+class _Agent:
     def __init__(self, model, config: dict, device: torch.device):
         self.model = model
         self.config = config
@@ -38,7 +41,41 @@ class _OnnxAgent:
         return logits.argmax(-1).cpu().item()
 
 
-def run_episode(agent: _OnnxAgent, env_cfg: EnvConfig) -> float:
+def load_from_onnx(path: str, device: torch.device):
+    import onnx as onnx_lib
+    from onnx2pytorch import ConvertModel
+    onnx_model = onnx_lib.load(path)
+    config = next(
+        (json.loads(p.value) for p in onnx_model.metadata_props if p.key == "config"), {}
+    )
+    model = ConvertModel(onnx_model).eval().to(device, dtype=DTYPE)
+    return model, config
+
+
+def load_from_checkpoint(path: str, device: torch.device):
+    from doomagent.models.encoder import IMPALAEncoder, NatureCNN
+    from doomagent.models.ppo import PPOActorCritic
+    from doomagent.config import EnvConfig as EC
+    ckpt = torch.load(path, map_location=device, weights_only=True)
+    # Infer in_channels from first conv weight shape
+    first_w = next(v for k, v in ckpt["model"].items() if "conv" in k and v.ndim == 4)
+    in_channels = first_w.shape[1]
+    # Try IMPALA first (smaller out_dim=256), fall back to NatureCNN
+    env_cfg = EC()
+    try:
+        enc = IMPALAEncoder(in_channels=in_channels)
+        model = PPOActorCritic(enc, n_actions=8, env_cfg=env_cfg)
+        model.load_state_dict(ckpt["model"])
+    except RuntimeError:
+        enc = NatureCNN(in_channels=in_channels)
+        model = PPOActorCritic(enc, n_actions=8, env_cfg=env_cfg)
+        model.load_state_dict(ckpt["model"])
+    model.eval().to(device, dtype=DTYPE)
+    config = model.onnx_config
+    return model, config
+
+
+def run_episode(agent: _Agent, env_cfg: EnvConfig) -> float:
     env = make_env(env_cfg)
     obs = env.reset()[0]
     score, done = 0.0, False
@@ -53,23 +90,24 @@ def run_episode(agent: _OnnxAgent, env_cfg: EnvConfig) -> float:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--submission", required=True)
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument("--submission", help="Path to ONNX submission file")
+    group.add_argument("--checkpoint", help="Path to PyTorch checkpoint (.pt)")
     parser.add_argument("--episodes", type=int, default=10)
     parser.add_argument("--seed", type=int, default=1337)
     args = parser.parse_args()
 
-    size_mb = os.path.getsize(args.submission) / 1024 ** 2
-    if size_mb > 50:
-        raise ValueError(f"Model is {size_mb:.1f} MB — exceeds the 50 MB limit.")
+    if args.submission:
+        size_mb = os.path.getsize(args.submission) / 1024 ** 2
+        if size_mb > 50:
+            raise ValueError(f"Model is {size_mb:.1f} MB — exceeds the 50 MB limit.")
+        model, config = load_from_onnx(args.submission, DEVICE)
+        print(f"Loaded ONNX from {args.submission}")
+    else:
+        model, config = load_from_checkpoint(args.checkpoint, DEVICE)
+        print(f"Loaded checkpoint from {args.checkpoint}")
 
-    onnx_model = onnx.load(args.submission)
-    config = next(
-        (json.loads(p.value) for p in onnx_model.metadata_props if p.key == "config"),
-        {},
-    )
-    model = ConvertModel(onnx_model).eval().to(DEVICE, dtype=DTYPE)
-    agent = _OnnxAgent(model, config, DEVICE)
-
+    agent = _Agent(model, config, DEVICE)
     env_cfg = EnvConfig(
         screen_format=config.get("screen_format", 0),
         n_stack_frames=config.get("n_stack_frames", 1),
