@@ -23,7 +23,7 @@ A PPO-based agent for the [JKU Deep Reinforcement Learning](https://www.jku.at/)
 
 ## Recorded Run
 
-<video src="resources/recorded_run.mp4" controls width="100%"></video>
+<img src="resources/recorded_run.gif" alt="Recorded run" width="100%">
 
 *Best episode from `impala_6M` — +577.8 score (~5.8 net frags)*
 
