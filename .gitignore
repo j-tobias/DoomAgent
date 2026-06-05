@@ -14,3 +14,9 @@ wheels/
 runs/
 *.onnx
 resources/*.py
+resources/doom_arena
+
+# OS / editor
+.DS_Store
+._.DS_Store
+_vizdoom.ini

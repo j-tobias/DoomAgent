@@ -60,8 +60,10 @@ def load_from_checkpoint(path: str, device: torch.device):
     # Infer in_channels from first conv weight shape
     first_w = next(v for k, v in ckpt["model"].items() if "conv" in k and v.ndim == 4)
     in_channels = first_w.shape[1]
+    # Infer n_stack_frames: in_channels = base_channels * n_stack_frames (base = 3 for RGB)
+    n_stack_frames = in_channels // 3
+    env_cfg = EC(n_stack_frames=n_stack_frames)
     # Try IMPALA first (smaller out_dim=256), fall back to NatureCNN
-    env_cfg = EC()
     try:
         enc = IMPALAEncoder(in_channels=in_channels)
         model = PPOActorCritic(enc, n_actions=8, env_cfg=env_cfg)

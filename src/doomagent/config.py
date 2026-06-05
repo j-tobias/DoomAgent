@@ -50,6 +50,8 @@ class PPOConfig(TrainConfig):
     ent_coef_final: float = 0.001   # floor entropy coefficient
     # KL early stopping
     target_kl: float | None = 0.01 # stop update epochs when mean KL exceeds this
+    # Seed randomisation
+    random_seeds: bool = True       # randomise VizDoom spawn seed each episode
 
 
 @dataclass

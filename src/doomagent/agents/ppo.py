@@ -7,6 +7,7 @@ import torch.optim as optim
 
 from ..buffers.rollout import RolloutBuffer
 from ..config import PPOConfig
+from ..env import reseed_env
 from ..models.ppo import PPOActorCritic
 from ..utils.logger import Logger
 from ..utils.running_stats import RunningMeanStd
@@ -215,6 +216,8 @@ class PPOAgent(BaseAgent):
                 if done:
                     completed.append({"ep_reward": ep_reward, "ep_len": ep_len})
                     ep_reward, ep_len = 0.0, 0
+                    if self.cfg.random_seeds:
+                        reseed_env(env, int(torch.randint(int(1e7), (1,)).item()))
                     obs = env.reset()[0]
                 else:
                     obs = obs_list[0]

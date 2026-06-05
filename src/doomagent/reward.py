@@ -30,7 +30,11 @@ class CustomReward(VizDoomReward):
 
 
 class DeathPenaltyReward(VizDoomReward):
-    """Base reward + strong penalty on death to discourage passive/suicidal behaviour."""
+    """Base reward + penalty on death to discourage passive/suicidal behaviour."""
+
+    def __init__(self, num_players: int, death_penalty: float = 10.0):
+        super().__init__(num_players)
+        self.death_penalty = death_penalty
 
     def __call__(
         self,
@@ -40,5 +44,5 @@ class DeathPenaltyReward(VizDoomReward):
         player_id: int,
     ) -> Tuple:
         base = super().__call__(vizdoom_reward, game_var, game_var_old, player_id)
-        rwd_dead = -10.0 if game_var["DEAD"] > game_var_old["DEAD"] else 0.0
+        rwd_dead = -self.death_penalty if game_var["DEAD"] > game_var_old["DEAD"] else 0.0
         return (*base, rwd_dead)

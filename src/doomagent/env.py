@@ -11,6 +11,12 @@ from .config import EnvConfig
 _JKU_CFG = str(Path(doom_arena.__file__).parent / "scenarios" / "jku.cfg")
 
 
+def reseed_env(env: VizdoomMPEnv, seed: int) -> None:
+    """Update the VizDoom doom_seed on all player envs before the next reset."""
+    for player_env in env.envs:
+        player_env.doom_seed = seed
+
+
 def make_env(cfg: EnvConfig, reward_fn: Optional[Callable] = None) -> VizdoomMPEnv:
     extra_state = None
     if cfg.extra_state:

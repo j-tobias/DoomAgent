@@ -39,8 +39,12 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--ent-coef", type=float, default=0.01)
     p.add_argument("--extra-state", nargs="+", default=None,
                    help="Extra observation buffers, e.g. --extra-state labels depth")
+    p.add_argument("--n-stack-frames", type=int, default=1,
+                   help="Number of frames to stack in the observation (default: 1)")
     p.add_argument("--death-penalty", action="store_true",
-                   help="Use DeathPenaltyReward (-10 on death) instead of CustomReward")
+                   help="Use DeathPenaltyReward instead of CustomReward")
+    p.add_argument("--death-penalty-value", type=float, default=10.0,
+                   help="Penalty magnitude on death (default: 10.0)")
     p.add_argument("--encoder", choices=["nature", "impala"], default="impala",
                    help="Encoder architecture (default: impala)")
     p.add_argument("--no-reward-norm", action="store_true",
@@ -52,6 +56,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--target-kl", type=float, default=0.01,
                    help="KL early-stopping threshold (default: 0.01, set 0 to disable)")
     p.add_argument("--seed", type=int, default=1337)
+    p.add_argument("--no-random-seeds", action="store_true",
+                   help="Fix the VizDoom seed across all episodes (disables spawn randomisation)")
     p.add_argument("--no-wandb", action="store_true")
     return p.parse_args()
 
@@ -66,7 +72,8 @@ def main() -> None:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Device: {device}")
 
-    env_cfg = EnvConfig(seed=args.seed, extra_state=args.extra_state)
+    env_cfg = EnvConfig(seed=args.seed, extra_state=args.extra_state,
+                        n_stack_frames=args.n_stack_frames)
     n_minibatches = args.n_minibatches or max(1, args.n_steps // 512)
     cfg = PPOConfig(
         env=env_cfg,
@@ -81,16 +88,18 @@ def main() -> None:
         anneal_ent_coef=not args.no_ent_anneal,
         ent_coef_final=args.ent_coef_final,
         target_kl=args.target_kl if args.target_kl > 0 else None,
+        random_seeds=not args.no_random_seeds,
     )
 
     reward_fn = (
-        DeathPenaltyReward(num_players=1)
+        DeathPenaltyReward(num_players=1, death_penalty=args.death_penalty_value)
         if args.death_penalty
         else CustomReward(num_players=1)
     )
     env = make_env(env_cfg, reward_fn=reward_fn)
     n_actions = env.action_space.n
-    in_channels = env.observation_space.shape[0]
+    # observation_space.shape reports raw VizDoom resolution (never updated for stacking)
+    in_channels = env.observation_space.shape[0] * env_cfg.n_stack_frames
 
     encoder = _ENCODERS[args.encoder](in_channels=in_channels)
     model = PPOActorCritic(encoder, n_actions=n_actions, env_cfg=env_cfg)

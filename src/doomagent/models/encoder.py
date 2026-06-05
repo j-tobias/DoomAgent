@@ -132,6 +132,8 @@ class IMPALAEncoder(BaseEncoder):
         self.linear = nn.Linear(flat_dim, out_dim)
 
     def forward(self, obs: torch.Tensor) -> torch.Tensor:
+        if obs.ndim == 5:  # (B, C, T, H, W) from frame stacking → (B, C*T, H, W)
+            obs = obs.view(obs.shape[0], -1, obs.shape[-2], obs.shape[-1])
         return self.linear(self.act(self.conv(obs)).flatten(1))
 
 
@@ -174,4 +176,6 @@ class NatureCNN(BaseEncoder):
         self.linear = nn.Linear(flat_dim, out_dim)
 
     def forward(self, obs: torch.Tensor) -> torch.Tensor:
+        if obs.ndim == 5:  # (B, C, T, H, W) from frame stacking → (B, C*T, H, W)
+            obs = obs.view(obs.shape[0], -1, obs.shape[-2], obs.shape[-1])
         return self.linear(self.cnn(obs))
