@@ -36,11 +36,12 @@ A PPO-based agent for the [JKU Deep Reinforcement Learning](https://www.jku.at/)
 | `ppo_baseline` | 1M | — | NatureCNN, no extras |
 | `impala_2M` | 2M | — | IMPALA encoder |
 | `impala_4M_big` | 4M | — | + large rollout buffer (20k steps) |
-| `impala_6M` | 6M | **490** ✓ | + reward norm, entropy anneal, KL stop |
+| `impala_6M` | 6M | 490 | + reward norm, entropy anneal, KL stop |
 | `impala_10M_death` | 10M | 483 | + death penalty (−10) |
 | `impala_10M_stack4` | 10M | 420 | + frame stacking (n=4) |
+| `impala_12M_death2` | 12M | **523** ✓ | + 12M steps, death penalty |
 
-**Best submission:** `impala_6M` · server score **490**
+**Best submission:** `impala_12M_death2` · server score **523**
 
 ---
 
