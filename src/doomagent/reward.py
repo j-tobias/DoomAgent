@@ -29,6 +29,26 @@ class CustomReward(VizDoomReward):
         return base
 
 
+class AliveReward(VizDoomReward):
+    """Base reward + small per-tick bonus for being alive (not in respawn state).
+    Rewards minimising time lost to dying without penalising aggression."""
+
+    def __init__(self, num_players: int, alive_bonus: float = 0.05):
+        super().__init__(num_players)
+        self.alive_bonus = alive_bonus
+
+    def __call__(
+        self,
+        vizdoom_reward: float,
+        game_var: Dict[str, float],
+        game_var_old: Dict[str, float],
+        player_id: int,
+    ) -> Tuple:
+        base = super().__call__(vizdoom_reward, game_var, game_var_old, player_id)
+        rwd_alive = 0.0 if game_var["DEAD"] else self.alive_bonus
+        return (*base, rwd_alive)
+
+
 class DeathPenaltyReward(VizDoomReward):
     """Base reward + penalty on death to discourage passive/suicidal behaviour."""
 

@@ -32,6 +32,8 @@ class PPOAgent(BaseAgent):
         self.optimizer = optim.Adam(model.parameters(), lr=cfg.lr, eps=1e-5)
         self._buffer: RolloutBuffer | None = None
         self._reward_rms = RunningMeanStd()  # for reward normalisation
+        self._ema_reward: float | None = None
+        self._best_ema_reward: float = float("-inf")
 
     def setup(self, obs_shape: tuple) -> None:
         """Allocate the RolloutBuffer on CPU (minibatches move to GPU during update)."""
@@ -66,6 +68,24 @@ class PPOAgent(BaseAgent):
         if "reward_rms" in ckpt:
             self._reward_rms.load_state_dict(ckpt["reward_rms"])
         print(f"Checkpoint loaded ← {path}  (step {self.step})")
+
+    def load_weights(self, path: str | Path, partial: bool = False) -> None:
+        """Warm-start from a pretrained checkpoint — loads model weights and
+        reward normalisation stats, but resets step counter and optimizer so
+        LR annealing restarts cleanly for the fine-tuning budget."""
+        ckpt = torch.load(path, map_location=self.device, weights_only=True)
+        if partial:
+            current = self.model.state_dict()
+            compatible = {k: v for k, v in ckpt["model"].items()
+                          if k in current and v.shape == current[k].shape}
+            current.update(compatible)
+            self.model.load_state_dict(current)
+            print(f"Partial load: {len(compatible)}/{len(ckpt['model'])} layers transferred")
+        else:
+            self.model.load_state_dict(ckpt["model"])
+        if "reward_rms" in ckpt:
+            self._reward_rms.load_state_dict(ckpt["reward_rms"])
+        # step and optimizer intentionally left at initial values
 
     # ------------------------------------------------------------------
     # BaseAgent contract
@@ -246,6 +266,7 @@ class PPOAgent(BaseAgent):
         if self._buffer is None:
             self.setup(obs_shape)
         last_checkpoint = 0
+        out_dir = Path(self.cfg.out_dir) / self.cfg.run_name
 
         while self.step < self.cfg.total_steps:
             progress = self.step / self.cfg.total_steps
@@ -282,6 +303,15 @@ class PPOAgent(BaseAgent):
                 self.save(ckpt)
                 last_checkpoint = self.step
 
-        out_dir = Path(self.cfg.out_dir) / self.cfg.run_name
+            # Best-checkpoint tracking: export submission.onnx whenever EMA reward peaks
+            ep_r = rollout_info.get("ep_reward_mean")
+            if ep_r is not None:
+                self._ema_reward = (ep_r if self._ema_reward is None
+                                    else 0.05 * ep_r + 0.95 * self._ema_reward)
+                if (self.step > self.cfg.total_steps * 0.10
+                        and self._ema_reward > self._best_ema_reward):
+                    self._best_ema_reward = self._ema_reward
+                    self.export_onnx(out_dir / "submission.onnx", obs_shape)
+
         self.export_onnx(out_dir / "submission.onnx", obs_shape)
         env.close()

@@ -21,7 +21,7 @@ from doomagent.config import EnvConfig, PPOConfig
 from doomagent.env import make_env
 from doomagent.models.encoder import IMPALAEncoder, NatureCNN
 from doomagent.models.ppo import PPOActorCritic
-from doomagent.reward import CustomReward, DeathPenaltyReward
+from doomagent.reward import AliveReward, CustomReward, DeathPenaltyReward
 from doomagent.utils.logger import Logger
 
 _ENCODERS = {"nature": NatureCNN, "impala": IMPALAEncoder}
@@ -45,6 +45,8 @@ def parse_args() -> argparse.Namespace:
                    help="Use DeathPenaltyReward instead of CustomReward")
     p.add_argument("--death-penalty-value", type=float, default=10.0,
                    help="Penalty magnitude on death (default: 10.0)")
+    p.add_argument("--alive-reward", action="store_true",
+                   help="Use AliveReward: base reward + per-tick bonus for being alive")
     p.add_argument("--encoder", choices=["nature", "impala"], default="impala",
                    help="Encoder architecture (default: impala)")
     p.add_argument("--no-reward-norm", action="store_true",
@@ -59,6 +61,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--no-random-seeds", action="store_true",
                    help="Fix the VizDoom seed across all episodes (disables spawn randomisation)")
     p.add_argument("--no-wandb", action="store_true")
+    p.add_argument("--pretrain-checkpoint", type=str, default=None,
+                   help="Checkpoint to warm-start model weights from (optimizer and step reset)")
+    p.add_argument("--partial-load", action="store_true",
+                   help="Skip layers whose shapes don't match (for architecture changes e.g. stack4)")
     return p.parse_args()
 
 
@@ -91,11 +97,12 @@ def main() -> None:
         random_seeds=not args.no_random_seeds,
     )
 
-    reward_fn = (
-        DeathPenaltyReward(num_players=1, death_penalty=args.death_penalty_value)
-        if args.death_penalty
-        else CustomReward(num_players=1)
-    )
+    if args.death_penalty:
+        reward_fn = DeathPenaltyReward(num_players=1, death_penalty=args.death_penalty_value)
+    elif args.alive_reward:
+        reward_fn = AliveReward(num_players=1)
+    else:
+        reward_fn = CustomReward(num_players=1)
     env = make_env(env_cfg, reward_fn=reward_fn)
     n_actions = env.action_space.n
     # observation_space.shape reports raw VizDoom resolution (never updated for stacking)
@@ -104,6 +111,10 @@ def main() -> None:
     encoder = _ENCODERS[args.encoder](in_channels=in_channels)
     model = PPOActorCritic(encoder, n_actions=n_actions, env_cfg=env_cfg)
     agent = PPOAgent(model, cfg, device)
+
+    if args.pretrain_checkpoint:
+        agent.load_weights(args.pretrain_checkpoint, partial=args.partial_load)
+        print(f"Warm-started from {args.pretrain_checkpoint}")
 
     log_dir = Path(cfg.out_dir) / cfg.run_name
     with Logger(

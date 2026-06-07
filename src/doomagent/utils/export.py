@@ -25,6 +25,8 @@ class _LogitsOnly(nn.Module):
         self.model = model
 
     def forward(self, obs: torch.Tensor) -> torch.Tensor:
+        if obs.ndim == 5:  # (B, C, T, H, W) → (B, C*T, H, W) before ONNX graph
+            obs = obs.reshape(obs.shape[0], -1, obs.shape[-2], obs.shape[-1])
         out = self.model(obs)
         return out[0] if isinstance(out, tuple) else out
 

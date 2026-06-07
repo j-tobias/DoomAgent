@@ -18,6 +18,7 @@ A PPO-based agent for the [JKU Deep Reinforcement Learning](https://www.jku.at/)
 - 1 player vs 4 bots · ROOM map · `episode_timeout = 2000`
 - `Discrete(8)` action space · `128×128` RGB observations
 - Reward: `+2` per hit · `-0.1` per hit taken · `+100` per frag
+- Deaths are **respawns** — the episode never terminates early
 
 ---
 
@@ -25,7 +26,7 @@ A PPO-based agent for the [JKU Deep Reinforcement Learning](https://www.jku.at/)
 
 <img src="resources/recorded_run.gif" alt="Recorded run" width="100%">
 
-*Best episode from `impala_6M` — +577.8 score (~5.8 net frags)*
+*Episode from early `impala_6M` checkpoint*
 
 ---
 
@@ -39,9 +40,12 @@ A PPO-based agent for the [JKU Deep Reinforcement Learning](https://www.jku.at/)
 | `impala_6M` | 6M | 490 | + reward norm, entropy anneal, KL stop |
 | `impala_10M_death` | 10M | 483 | + death penalty (−10) |
 | `impala_10M_stack4` | 10M | 420 | + frame stacking (n=4) |
-| `impala_12M_death2` | 12M | **523** ✓ | + 12M steps, death penalty |
+| `impala_12M_death2` | 12M | 523 | + 12M steps, death penalty |
+| `impala_12M_stack4_death2` | 12M | 480 | stack4 — ONNX conversion gap (−62 pts) |
+| `impala_ft6M_base` | +6M fine-tune | **617** ✓ | warm-start, no death penalty, LR 10× lower |
+| `impala_ft6M_alive` | +6M fine-tune | pending | + AliveReward (per-tick survival bonus) |
 
-**Best submission:** `impala_12M_death2` · server score **523**
+**Best submission:** `impala_ft6M_base` · server score **617**
 
 ---
 
@@ -68,31 +72,35 @@ ReLU → Flatten → Linear(8192, 256)
 - KL early stopping (`target_kl=0.01`)
 - LR annealing with 10% floor
 - Large CPU rollout buffer (20k steps) — stored on CPU, batched to GPU
+- EMA best-checkpoint tracking — exports `submission.onnx` live during training
 
 ---
 
 ## Training
 
 ```bash
-# Reproduce impala_6M (best submission)
+# Train from scratch
 uv run scripts/train.py \
-  --run-name impala_6M \
-  --total-steps 6_000_000 \
+  --run-name my_run \
+  --total-steps 12_000_000 \
   --n-steps 20000
 
-# With frame stacking
+# Fine-tune from a pretrained checkpoint (recommended)
 uv run scripts/train.py \
-  --run-name my_run \
-  --total-steps 10_000_000 \
-  --n-steps 4096 \
-  --n-stack-frames 4
+  --run-name my_finetune \
+  --total-steps 6_000_000 \
+  --n-steps 20000 \
+  --lr 2.5e-5 \
+  --pretrain-checkpoint runs/impala_ft6M_base/ckpt_006000000.pt
 
-# With death penalty
+# With alive reward (best training signal found)
 uv run scripts/train.py \
   --run-name my_run \
-  --total-steps 10_000_000 \
-  --death-penalty \
-  --death-penalty-value 2
+  --total-steps 6_000_000 \
+  --n-steps 20000 \
+  --lr 2.5e-5 \
+  --alive-reward \
+  --pretrain-checkpoint runs/impala_ft6M_base/ckpt_006000000.pt
 ```
 
 Key flags:
@@ -103,10 +111,13 @@ Key flags:
 | `--n-steps` | 512 | Rollout buffer size |
 | `--n-stack-frames` | 1 | Frame stacking depth |
 | `--encoder` | `impala` | `impala` or `nature` |
-| `--death-penalty` | off | Add penalty on death |
-| `--death-penalty-value` | 10.0 | Penalty magnitude |
+| `--lr` | 2.5e-4 | Initial learning rate |
+| `--pretrain-checkpoint` | — | Warm-start from checkpoint (resets optimizer) |
+| `--partial-load` | off | Skip mismatched layers (for architecture changes) |
+| `--alive-reward` | off | Per-tick bonus for being alive (not respawning) |
+| `--death-penalty` | off | Add penalty on death (deprecated — use alive-reward) |
+| `--ent-coef-final` | 0.001 | Entropy annealing floor |
 | `--no-reward-norm` | — | Disable reward normalisation |
-| `--no-ent-anneal` | — | Disable entropy annealing |
 | `--no-random-seeds` | — | Fix VizDoom spawn seed |
 
 ---
@@ -136,20 +147,21 @@ uv run scripts/record.py --checkpoint runs/<run>/ckpt_XXXXXXXXX.pt --record-best
 ```
 DoomAgent/
 ├── src/doomagent/
-│   ├── agents/          # PPOAgent, DQNAgent
+│   ├── agents/          # PPOAgent (with warm-start + EMA checkpoint tracking)
 │   ├── buffers/         # RolloutBuffer (PPO), ReplayBuffer (DQN)
 │   ├── models/          # PPOActorCritic, DQNModel, IMPALAEncoder, NatureCNN
 │   ├── utils/           # Logger, RunningMeanStd, ONNX export
 │   ├── config.py        # PPOConfig, DQNConfig, EnvConfig
 │   ├── env.py           # make_env()
-│   └── reward.py        # CustomReward, DeathPenaltyReward
+│   └── reward.py        # CustomReward, AliveReward, DeathPenaltyReward
 ├── scripts/
 │   ├── train.py         # PPO training entry point
 │   ├── evaluate.py      # Local evaluation
 │   └── record.py        # Video recording
 ├── resources/
-│   ├── recorded_run.mp4
+│   ├── recorded_run.gif
 │   └── server_eval_doom.py
+├── RESEARCH_REPORT.md   # Detailed experiment log and findings
 ├── jku.wad/             # Git submodule — VizDoom environment
-└── Note.md              # Experiment notes and next steps
+└── Note.md              # Experiment notes
 ```
