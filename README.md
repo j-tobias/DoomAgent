@@ -43,7 +43,7 @@ A PPO-based agent for the [JKU Deep Reinforcement Learning](https://www.jku.at/)
 | `impala_12M_death2` | 12M | 523 | + 12M steps, death penalty |
 | `impala_12M_stack4_death2` | 12M | 480 | stack4 — ONNX conversion gap (−62 pts) |
 | `impala_ft6M_base` | +6M fine-tune | **617** ✓ | warm-start, no death penalty, LR 10× lower |
-| `impala_ft6M_alive` | +6M fine-tune | pending | + AliveReward (per-tick survival bonus) |
+| `impala_ft6M_alive` | +6M fine-tune | 586 | + AliveReward — inflates training reward ~95 pts, hurts server score |
 
 **Best submission:** `impala_ft6M_base` · server score **617**
 

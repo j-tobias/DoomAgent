@@ -210,7 +210,7 @@ Phase 2: 6M-step fine-tuning from impala_12M_death2 checkpoint
 | impala_ft6M_base | +6M | 622 (step 3.42M) | 589 | **617** |
 | impala_ft6M_highent | +6M | 623 (step 0.78M) | 593 | — |
 | impala_ft6M_stack4 | ~2.2M (killed) | 284 | — | — |
-| impala_ft6M_alive | +6M | **711** (step 4.04M) | 665 | **pending** |
+| impala_ft6M_alive | +6M | **711** (step 4.04M) | 665 | 586 |
 
 ### 6.3 Run-by-Run Analysis
 
@@ -250,13 +250,14 @@ Phase 2: 6M-step fine-tuning from impala_12M_death2 checkpoint
 - Resource-intensive with no sign of improvement trajectory
 - Killed to free CPU/GPU for `impala_ft6M_alive`
 
-#### `impala_ft6M_alive` — Server score: pending
+#### `impala_ft6M_alive` — Server score: **586**
 - Introduced `AliveReward`: base reward + 0.05 per tick for being alive (not respawning)
 - Peaked at **711** (step 4.04M) — the highest training reward recorded in the project
 - Final reward 665 — strong and consistent throughout training
-- The alive bonus provides dense per-tick supervision without conflicting with the server's kill-based reward
-- Being alive is correlated with winning firefights — the bonus implicitly rewards aggressive, accurate play that minimises time spent dead
-- submission.onnx captured by EMA best-checkpoint tracker throughout training
+- **However**, the alive bonus contributes ~95 pts/episode to training reward (≈2000 ticks × 0.05), which the server does not award
+- Stripping the bonus from the training peak: 711 − 95 ≈ 616 — almost identical to `impala_ft6M_base`'s real performance
+- The 586 server score suggests the agent became marginally more risk-averse: it had an incentive to avoid respawn ticks even when taking risks would have led to more kills
+- **Lesson**: training reward inflation from auxiliary bonuses is misleading; the bonus must be carefully scaled so it does not distort the core kill-seeking behaviour
 
 ---
 
@@ -276,15 +277,15 @@ reward = base + (−10 if newly_dead else 0)
 ```
 Motivation: discourage passive or suicidal play. Invalidated once we discovered deaths are respawns, not episode terminations. The penalty did more harm than good — it suppressed aggression.
 
-### `AliveReward` (best)
+### `AliveReward` (mixed results)
 ```
 reward = base + (0.05 if not DEAD else 0)
 ```
-Per-tick bonus for being in the alive state. Effective because:
-1. Dense signal: 2000 ticks per episode, up to +100 per episode from survival alone
-2. Aligned with server objective: staying alive enables more shots, more kills
-3. Non-conflicting: 0.05/tick is small relative to +100/frag, so kill incentives dominate
-4. No episode structure assumption: correct regardless of whether deaths end episodes
+Per-tick bonus for being in the alive state. Motivation: dense supervision signal, being alive enables more shooting. Results:
+- Training reward inflated by ~95 pts/episode (2000 ticks × 0.05 when fully alive)
+- Server score **586** — worse than `impala_ft6M_base` (617) despite higher training numbers
+- The bonus is not as small as it appears: 95 pts ≈ nearly one extra frag per episode, enough to distort the policy toward risk-averse play
+- For future use, the alive bonus would need to be scaled down significantly (e.g. 0.005/tick → ~10 pts/episode) to avoid dominating the kill signal
 
 ---
 
@@ -335,28 +336,28 @@ Fine-tune base (6M more steps, no death penalty):   617  [+94 vs baseline]
 Fine-tune alive reward (pending server eval):        ???  [training peak: 711]
 ```
 
-The fine-tuning paradigm (pretrain → adapt) produced a **+18% server score improvement** over the scratch-trained model in just half the compute.
+The fine-tuning paradigm (pretrain → adapt) produced a **+18% server score improvement** over the scratch-trained model in just half the compute. The AliveReward run scored lower (586) despite higher training numbers — the auxiliary bonus inflated metrics without improving real kill performance.
 
 ---
 
 ## 10. Conclusions and Next Steps
 
 ### What Worked
-1. **Fine-tuning from pretrained weights** at 10× reduced LR: most impactful intervention, +94 server points
-2. **AliveReward**: best training performance of any run (711 peak), server result pending
-3. **EMA best-checkpoint tracking**: ensures the best policy during training is submitted, not the final (possibly regressed) policy
-4. **Large rollout buffer (n_steps=20,000)**: stable, low-variance training at 166 fps
-5. **Dropping the death penalty**: immediately unlocked more aggressive play strategies
+1. **Fine-tuning from pretrained weights** at 10× reduced LR: most impactful intervention, +94 server points (523 → 617)
+2. **EMA best-checkpoint tracking**: ensures the best policy during training is submitted, not the final (possibly regressed) policy
+3. **Large rollout buffer (n_steps=20,000)**: stable, low-variance training at 166 fps
+4. **Dropping the death penalty**: immediately unlocked more aggressive play strategies
 
 ### What Did Not Work
-1. **Frame stacking (n_stack=4)**: ONNX conversion gap erased any potential benefit; encoder architecture mismatch for fine-tuning required partial loading with only 35/36 layers
-2. **High entropy floor (ent_coef_final=0.005)**: caused plateau for a mature pretrained policy; exploration pressure useful early but counterproductive late
-3. **4 parallel runs**: CPU bottleneck reduced throughput 10×; 2-at-a-time is the practical maximum
+1. **AliveReward (0.05/tick)**: inflated training reward by ~95 pts/episode, masking that real kill performance was unchanged; induced mild risk-aversion that hurt server score (586 vs 617 for base)
+2. **Frame stacking (n_stack=4)**: ONNX conversion gap erased any potential benefit; encoder architecture mismatch for fine-tuning required partial loading with only 35/36 layers
+3. **High entropy floor (ent_coef_final=0.005)**: caused plateau for a mature pretrained policy; exploration pressure useful early but counterproductive late
+4. **4 parallel runs**: CPU bottleneck reduced throughput 10×; 2-at-a-time is the practical maximum
 
 ### Open Questions
-1. **AliveReward server score**: the training signal suggests a large improvement; the actual server score will confirm whether the 0.05/tick bonus translates
-2. **Continued fine-tuning**: `impala_ft6M_base` and `impala_ft6M_alive` are still improving at their final steps — more compute budget would likely push scores higher
-3. **Stack4 with proper ONNX fix**: the ONNX gap is now fixed; a fresh stack4 run from the 617 checkpoint might be net positive if temporal information helps
+1. **Continued fine-tuning from 617**: `impala_ft6M_base` was still improving at its final step — more compute budget would likely push the score further
+2. **Stack4 with proper ONNX fix**: the ONNX gap is now fixed; a fresh stack4 run from the 617 checkpoint might be net positive if temporal information helps
+3. **Lower alive bonus**: scaling to 0.005/tick (~10 pts/episode) may provide the dense signal benefit without distorting kill incentives
 4. **Bot skill escalation**: all training uses bot_skill=0 (easy); training against harder bots might generalise better to the server's bot configuration
 
 ---
